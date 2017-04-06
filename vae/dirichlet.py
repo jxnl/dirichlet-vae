@@ -1,22 +1,41 @@
-import tensorflow as T
-from keras.layers import Input, Dense, Lambda, Dropout
+from keras.layers import Input, Dense, Lambda
 from keras.models import Model
 from keras import backend as K
 from keras import metrics
 
+import tensorflow as T
+
 
 class SamplingReparamKL:
     def __init__(self, latent_dim, batch_size):
+        """Sampling Reparameterization using Optimal KL-Divergence
+        between k-dimensional Dirichlet and Logistic Normal.
+
+            mu_i = digamma(alpha_i) - digamma(alpha_k)
+            sigma_i = trigammma(alpha_i) - trigamma(alpha_k)
+
+        :param latent_dim: width of the latent dimension
+        :param batch_size: batch size for stocastic gradient descent
+        :return:
+        """
         self.latent_dim = latent_dim
         self.batch_size = batch_size
 
     def to_mu(self, alpha):
+        """
+        :param alpha: (Tensor)
+        :return: (Tensor) mu
+        """
         d1 = self.latent_dim - 1
         digamma_d = T.digamma(alpha[:, -1:])
         mu = T.digamma(alpha[:, :d1]) - digamma_d
         return mu
 
     def to_sd(self, alpha):
+        """
+        :param alpha: (Tensor)
+        :return: sigma (Tensor)
+        """
         _one = K.cast(1, dtype=alpha.dtype)
         d1 = self.latent_dim - 1
         var = (T.polygamma(_one, alpha[:, :d1])
@@ -25,6 +44,12 @@ class SamplingReparamKL:
         return sigma
 
     def sample(self, args):
+        """ Sample from Logistic Normal(mu,sigma) specified by the
+        reparameterization
+
+        :param args: (mu, sigma)[Tensor, Tensor]
+        :return: z* sample
+        """
         mu, sigma = args
         e = K.random_normal(
             shape=(self.batch_size, self.latent_dim-1))
@@ -36,22 +61,46 @@ class SamplingReparamKL:
 
 class SamplingReparamLaplace:
     def __init__(self, latent_dim, batch_size):
+        """Sampling Reparameterization using Laplace Apprixmation
+        between k-dimensional Dirichlet and Logistic Normal.
+
+           mu_i = log(alpha_i) - mean(log(alpha))
+           sigma_i = (1 - 2/k) * 1/alpha + 1/k^2 * sum(1/alpha)
+
+        :param latent_dim: width of the latent dimension
+        :param batch_size: batch size for stocastic gradient descent
+        :return:
+        """
         self.latent_dim = latent_dim
         self.batch_size = batch_size
 
     def to_mu(self, alpha):
+        """
+        :param alpha: (Tensor)
+        :return: mu (Tensor)
+        """
         log_alpha = K.log(alpha)
         mean_log_alpha = K.mean(log_alpha, axis=-1, keepdims=True)
         mu = log_alpha - mean_log_alpha
         return mu
 
     def to_sd(self, alpha):
+        """
+        :param alpha: (Tensor)
+        :return: sigma (Tensor)
+        """
         k1 = 1 - (2 / self.latent_dim)
         k2 = 1 / (self.latent_dim ** 2)
         sigma = k1 * 1/alpha + k2 * K.sum(1/alpha, axis=-1, keepdims=True)
         return sigma
 
     def sample(self, args):
+        """Sample from Logistic Normal(mu,sigma) specified by the
+        reparameterization
+
+        :param alpha:
+        :return:
+        """
         mu, sigma = args
         e = K.random_normal(
             shape=(self.batch_size, self.latent_dim))
@@ -66,9 +115,16 @@ class DirVae:
                  batch_size=16,
                  encoder_widths=50,
                  latent_dim=10,
-                 decoder_width=50,
-                 log_alpha=True,
-                 dropout=True):
+                 decoder_width=50):
+        """
+        :param original_dim: (int) dimension of the data point
+        :param reparam: (SamplingReparam)
+        :param batch_size: (int) batch size for training
+        :param encoder_widths: (int) width of encoder hidden layer
+        :param latent_dim: (int) width of latent hidden layer
+        :param decoder_width: width of decoder hidden layer
+        :return:
+        """
 
         self.batch_size = batch_size
         self.latent_dim = latent_dim
@@ -77,8 +133,6 @@ class DirVae:
         self.latent_dim = latent_dim
         self.decoder_width = decoder_width
         self.reparam = reparam(self.latent_dim, self.batch_size)
-        self.log_alpha = log_alpha
-        self.dropout = dropout
 
         # Network Specification
         self.x = Input(batch_shape=(self.batch_size, original_dim))
@@ -95,11 +149,8 @@ class DirVae:
                           activation='relu')
         self.generator = Dense(self.original_dim, activation='sigmoid')
 
-    def initialize(self):
+    def _initialize(self):
         z = (self.q_zx(self.x))
-
-        if self.dropout:
-            z = Dropout(0.5)(z)
 
         alpha = self.alpha(z)
         scale = self.scale(z)
@@ -143,17 +194,15 @@ class DirVae:
         self.vae = Model(self.x, x_star)
         self.vae.compile(optimizer='adam', loss=vae_loss)
 
-    def _set_encoder(self):
-        self.encoder = Model(self.x, self.latent_variable)
-
-    def _set_decoder(self):
-        z = Input(shape=(self.latent_dim,))
-        d1 = self.p_xz(z)
-        x_star = self.generator(d1)
-        self.decoder = Model(z, x_star)
 
     def fit(self, x_train, x_test, **kwargs):
-        self.initialize()
+        """
+        :param x_train:
+        :param x_test:
+        :param kwargs:
+        :return:
+        """
+        self._initialize()
         self.history = (
             self.vae.fit(x=x_train, y=x_train,
                          batch_size=self.batch_size,
@@ -165,10 +214,11 @@ class DirVae:
         self._set_encoder()
         self._set_decoder()
 
-    def encode(self, X):
-        z_star = self.encoder.predict(X)
-        return z_star
+    def _set_encoder(self):
+        self.encoder = Model(self.x, self.latent_variable)
 
-    def decode(self, L):
-        reconstruction = self.decoder.predict(L)
-        return reconstruction
+    def _set_decoder(self):
+        z = Input(shape=(self.latent_dim,))
+        d1 = self.p_xz(z)
+        x_star = self.generator(d1)
+        self.decoder = Model(z, x_star)

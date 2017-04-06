@@ -8,23 +8,25 @@ import matplotlib.gridspec as gridspec
 
 class MnistMetrics:
     def __init__(self, vae, x_test, y_test, logit=False):
-        L = vae.encoder.predict(x_test, batch_size=16)
-        self.L = L
+        self.L = vae.encoder.predict(x_test, batch_size=16)
+        
+        if logit:
+            self.L = np.exp(self.L)
+
+        self.L = self.L / self.L.sum(1, keepdims=1)
+
         self.vae = vae
+
         self.df = pd.DataFrame(L)
         self.df["label"] = y_test
         self.df = self.df.set_index("label").sort_index()
-
-        self.df = pd.concat([self.df.loc[i].mean() for i in range(10)], 1)
         self.df.columns = ["label_" + str(i) for i in self.df.columns]
 
-        if logit:
-            self.df = self.df.apply(np.exp)
-            self.df = self.df / self.df.sum(0)
+        self.means = self.df.groupby("label").mean()
 
     def plot_bar(self):
-        self.df.plot(kind="bar", subplots=(10), layout=(5, 2),
-                     figsize=(10, 10), legend=False)
+        self.df.T.plot(kind="bar", subplots=(10), layout=(5, 2),
+                       figsize=(10, 10), legend=False)
 
     def plot_mean_digits(self):
         for i, e in enumerate(self.df.columns):
@@ -61,22 +63,6 @@ class MnistMetrics:
                 fig = plt.plot(range(n), dat[0])
                 fig[0].axes.get_xaxis().set_visible(False)
                 fig[0].axes.get_yaxis().set_visible(False)
-
-    def plot_random_samples(self, n, m, base=None, sigma=1, logit=True):
-        for i in range(m * n):
-            dat = np.zeros(self.vae.latent_dim)
-            dat += np.random.normal(0, sigma, self.vae.latent_dim)
-
-            if logit:
-                dat = np.exp(dat)
-                dat /= dat.sum()
-
-            plt.subplot(n, m, 1 + i)
-            dat = np.array([dat])
-            img = self.vae.decoder.predict(dat).reshape(28, 28)
-            fig = plt.imshow(img)
-            fig.axes.get_xaxis().set_visible(False)
-            fig.axes.get_yaxis().set_visible(False)
 
     def plot_from(self, L):
         dat = np.array([L])
