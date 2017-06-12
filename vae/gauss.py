@@ -80,12 +80,6 @@ class GaussVae:
         self.vae.compile(optimizer='adam', loss=vae_loss)
 
     def fit(self, x_train, x_test, **kwargs):
-        """
-        :param x_train:
-        :param x_test:
-        :param kwargs:
-        :return:
-        """
         self._initialize()
         self.history = (
              self.vae.fit(x=x_train, y=x_train,
